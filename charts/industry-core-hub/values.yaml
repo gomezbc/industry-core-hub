@@ -29,6 +29,7 @@ replicaCount: 1
 
 # -- Backend configuration
 backend:
+  enabled: false
   name: "industry-core-hub-backend"
   image:
     repository: "ichub-backend"
@@ -158,6 +159,7 @@ backend:
       ephemeral-storage: "2Gi"
 
 frontend:
+  enabled: true
   name: "industry-core-hub-frontend"
   image:
     repository: "ichub-frontend"
