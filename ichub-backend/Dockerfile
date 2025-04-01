@@ -21,7 +21,7 @@
 #################################################################################
 
 
-FROM alpine:3.19
+FROM alpine:3.21
 
 USER root
 
@@ -34,7 +34,7 @@ WORKDIR /dataspace-sdk
 RUN ls -la
 
 ## Install Python
-RUN apk add python3 py3-pip libpq --no-cache
+RUN apk add python3 py3-pip libpq git --no-cache
 
 ## Install application requirements
 RUN pip3 install --break-system-packages --no-cache-dir --upgrade -r ./requirements.txt
