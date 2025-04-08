@@ -50,7 +50,7 @@ SQLAlchemy==2.0.38
 sqlmodel==0.0.22
 starlette==0.40.0
 tomli==2.0.1
-tractusx_sdk @ git+https://github.com/eclipse-tractusx/tractusx-sdk.git@07570bf2f345ae9c359a67ab4d1b8e154711d7ac
+tractusx_sdk==0.0.2
 typer==0.15.1
 typing_extensions==4.12.2
 urllib3==2.3.0
