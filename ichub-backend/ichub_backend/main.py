@@ -20,8 +20,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #################################################################################
 
-
-from fastapi import FastAPI, HTTPException, Request
+from ichub_backend.services.database import get_session
+from fastapi import Depends, FastAPI, HTTPException, Request
+from sqlmodel import Session
 
 ## FAST API example for keycloak
 from fastapi_keycloak_middleware import CheckPermissions
@@ -84,7 +85,7 @@ with open(app_config_path, 'rt') as f:
 app = FastAPI(title="main")
 
 @app.get("/example")
-async def api_call(request: Request):
+async def api_call(request: Request, session: Session = Depends(get_session)):
     """
     Example documentation
 
