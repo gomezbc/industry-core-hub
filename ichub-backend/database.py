@@ -23,6 +23,7 @@
 from config.config_manager import ConfigManager
 from config.log_manager import LoggingManager
 from sqlmodel import SQLModel, create_engine, text
+from models.metadata_database import models
 
 connection_string = ConfigManager.get_config("database.connectionString", default={})
 db_echo = ConfigManager.get_config("database.echo", default={False})
