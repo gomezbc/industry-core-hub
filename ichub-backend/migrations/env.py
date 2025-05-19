@@ -20,15 +20,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #################################################################################
 
-from logging.config import fileConfig
-
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
 from sqlmodel import SQLModel
 
-from config.config_manager import ConfigManager
+from managers.config.config_manager import ConfigManager
+from managers.config.log_manager import LoggingManager
 
 # import SQLModels to automatically generate migrations
 import models.metadata_database  # noqa: F401
@@ -37,10 +36,7 @@ import models.metadata_database  # noqa: F401
 # access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+logger = LoggingManager.get_logger(__name__)
 
 # We add the SQLModel metadata object here for 'autogenerate' support
 target_metadata = SQLModel.metadata
