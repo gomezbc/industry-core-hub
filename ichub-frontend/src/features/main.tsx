@@ -29,8 +29,8 @@ import {
   } from '@mui/icons-material';
   
   export const features = [
-    { icon: <Storefront />, path: '/catalog' },
-    { icon: <Category />, path: '/categories' },
-    { icon: <People />, path: '/shared' },
-    { icon: <Assignment />, path: '/status' }
+    { icon: <Storefront />, path: '/catalog', disabled: false },
+    { icon: <People />, path: '/shared', disabled: false },
+    { icon: <Category />, path: '/categories', disabled: true },
+    { icon: <Assignment />, path: '/status', disabled: true }
   ];

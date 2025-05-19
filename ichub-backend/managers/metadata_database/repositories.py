@@ -22,8 +22,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #################################################################################
 
+from sqlalchemy import case
 from sqlmodel import SQLModel, Session, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 from typing import TypeVar, Type, List, Optional, Generic
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
@@ -107,6 +108,15 @@ class BaseRepository(Generic[ModelType]):
 
 class BusinessPartnerRepository(BaseRepository[BusinessPartner]):
 
+    def create_new(self, name: str, bpnl: str) -> BusinessPartner:
+        """Create a new BusinessPartner instance."""
+        business_partner = BusinessPartner(
+            name=name,
+            bpnl=bpnl
+        )
+        self.create(business_partner)
+        return business_partner
+
     def get_by_name(self, name: str) -> Optional[BusinessPartner]:
         stmt = select(BusinessPartner).where(
             BusinessPartner.name == name)  # type: ignore
@@ -125,8 +135,32 @@ class CatalogPartRepository(BaseRepository[CatalogPart]):
             CatalogPart.manufacturer_part_id == manufacturer_part_id)
         return self._session.scalars(stmt).first()
 
-    def find_by_manufacturer_id_manufacturer_part_id(self, manufacturer_id: Optional[str], manufacturer_part_id: Optional[str], join_partner_catalog_parts : bool = False) -> List[CatalogPart]:
-        stmt = select(CatalogPart).distinct()
+    def find_by_manufacturer_id_manufacturer_part_id(self, manufacturer_id: Optional[str], manufacturer_part_id: Optional[str], join_partner_catalog_parts : bool = False) -> List[tuple[CatalogPart, int]]:
+        """
+        Find catalog parts by manufacturer ID and manufacturer part ID.
+        If manufacturer ID is not provided, all catalog parts are returned.
+        If manufacturer part ID is not provided, all catalog parts with the given manufacturer ID are returned.
+        
+        The result is a list of tuples, where each tuple contains the CatalogPart object and its status.
+        """
+
+        # Case to determine the status of the catalog part
+        status_expr = case(
+            # 0: no twin at all (draft)
+            (CatalogPart.twin_id.is_(None), 0),
+            # 1: twin exists, but not yet DTR-registered (pending)
+            (TwinRegistration.dtr_registered.is_(False), 1),
+            # 2: DTR-registered but not yet in any TwinExchange row (registered)
+            ((TwinRegistration.dtr_registered.is_(True)) & (TwinExchange.twin_id.is_(None)), 2),
+            # 3: DTR-registered AND appears in TwinExchange (shared)
+            ((TwinRegistration.dtr_registered.is_(True)) & (TwinExchange.twin_id.is_not(None)), 3),
+            else_=0
+        ).label("status")
+
+        stmt = select(CatalogPart, status_expr).distinct(CatalogPart.id)
+
+        stmt = stmt.outerjoin(TwinRegistration, TwinRegistration.twin_id == CatalogPart.twin_id)
+        stmt = stmt.outerjoin(TwinExchange, TwinExchange.twin_id == CatalogPart.twin_id)
 
         if manufacturer_id:
             stmt = stmt.join(LegalEntity, LegalEntity.id == CatalogPart.legal_entity_id).where(LegalEntity.bpnl == manufacturer_id)
@@ -155,13 +189,37 @@ class LegalEntityRepository(BaseRepository[LegalEntity]):
         return self._session.scalars(stmt).first()
 
 class PartnerCatalogPartRepository(BaseRepository[PartnerCatalogPart]):
-    pass
+    def get_by_catalog_part_id_business_partner_id(self, catalog_part_id: int, business_partner_id: int) -> Optional[PartnerCatalogPart]:
+        stmt = select(PartnerCatalogPart).where(
+            PartnerCatalogPart.catalog_part_id == catalog_part_id).where(
+            PartnerCatalogPart.business_partner_id == business_partner_id)
+        return self._session.scalars(stmt).first()
+    
+    def create_new(self, catalog_part_id: int, business_partner_id: int, customer_part_id: str) -> PartnerCatalogPart:
+        """Create a new PartnerCatalogPart instance."""
+        partner_catalog_part = PartnerCatalogPart(
+            catalog_part_id=catalog_part_id,
+            business_partner_id=business_partner_id,
+            customer_part_id=customer_part_id,
+        )
+        self.create(partner_catalog_part)
+        return partner_catalog_part
 
 class EnablementServiceStackRepository(BaseRepository[EnablementServiceStack]):
-    def get_by_name(self, name: str) -> Optional[EnablementServiceStack]:
+    def get_by_name(self, name: str, join_legal_entity: bool = False) -> Optional[EnablementServiceStack]:
         stmt = select(EnablementServiceStack).where(
             EnablementServiceStack.name == name)  # type: ignore
+        
+        if join_legal_entity:
+            stmt = stmt.join(LegalEntity, LegalEntity.id == EnablementServiceStack.legal_entity_id)
+
         return self._session.scalars(stmt).first()
+    
+    def find_by_legal_entity_bpnl(self, legal_entity_bpnl: str) -> List[EnablementServiceStack]:
+        stmt = select(EnablementServiceStack).join(
+            LegalEntity, LegalEntity.id == EnablementServiceStack.legal_entity_id).where(
+            LegalEntity.bpnl == legal_entity_bpnl)
+        return self._session.scalars(stmt).all()
 
 class TwinRepository(BaseRepository[Twin]):
     def create_new(self, global_id: UUID = None, dtr_aas_id: UUID = None):
@@ -311,6 +369,19 @@ class TwinExchangeRepository(BaseRepository[TwinExchange]):
         )
         self.create(twin_exchange)
         return twin_exchange
+    
+    def find_by_global_id_business_partner_number(self, global_id: UUID, business_partner_number: str) -> Optional[TwinExchange]:
+        stmt = select(TwinExchange).join(
+            Twin, TwinExchange.twin_id == Twin.id
+        ).join(
+            DataExchangeAgreement, TwinExchange.data_exchange_agreement_id == DataExchangeAgreement.id
+        ).join(
+            BusinessPartner, BusinessPartner.id == DataExchangeAgreement.business_partner_id
+        ).where(
+            Twin.global_id == global_id,
+            BusinessPartner.bpnl == business_partner_number
+        )
+        return self._session.scalars(stmt).first()  
 
 class TwinRegistrationRepository(BaseRepository[TwinRegistration]):
     def get_by_twin_id_enablement_service_stack_id(self, twin_id: int, enablement_service_stack_id: int) -> Optional[TwinRegistration]:

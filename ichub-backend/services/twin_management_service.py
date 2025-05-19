@@ -23,8 +23,9 @@
 #################################################################################
 
 from typing import Optional, Dict, Any, List
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from managers.config.config_manager import ConfigManager
 from managers.metadata_database.manager import RepositoryManagerFactory
 from managers.enablement_services.dtr_manager import DTRManager
 from managers.enablement_services.edc_manager import EDCManager
@@ -43,6 +44,8 @@ from models.services.twin_management import (
     TwinsAspectRegistrationMode,
 )
 
+CATALOG_DIGITAL_TWIN_TYPE = "PartType"
+
 class TwinManagementService:
     """
     Service class for managing twin-related operations (CRUD and Twin sharing).
@@ -59,15 +62,20 @@ class TwinManagementService:
             if not db_catalog_parts:
                 raise ValueError("Catalog part not found.")
             else:
-                db_catalog_part = db_catalog_parts[0]
+                db_catalog_part, _ = db_catalog_parts[0]
 
             # Step 2: Retrieve the enablement service stack entity from the DB according to the given name
             # (if not there => raise error)
             db_enablement_service_stack = repo.enablement_service_stack_repository.get_by_name(
-                enablement_service_stack_name
+                enablement_service_stack_name,
+                join_legal_entity=True
             )
             if not db_enablement_service_stack:
                 raise ValueError(f"Enablement service stack '{enablement_service_stack_name}' not found.")
+
+            # Step 2a: Enablement service stack consistency check
+            if db_enablement_service_stack.legal_entity.bpnl != create_input.manufacturer_id:
+                raise ValueError(f"Enablement service stack '{enablement_service_stack_name}' does not belong to the legal entity '{create_input.manufacturer_id}'.")
 
             # Step 3a: Load existing twin metadata from the DB (if there)
             if db_catalog_part.twin_id:
@@ -114,7 +122,8 @@ class TwinManagementService:
                     manufacturer_id=create_input.manufacturer_id,
                     manufacturer_part_id=create_input.manufacturer_part_id,
                     customer_part_ids=customer_part_ids,
-                    part_category=db_catalog_part.category
+                    part_category=db_catalog_part.category,
+                    digital_twin_type=CATALOG_DIGITAL_TWIN_TYPE
                 )
 
                 db_twin_registration.dtr_registered = True
@@ -148,7 +157,9 @@ class TwinManagementService:
                     modifiedDate=db_twin.modified_date,
                     manufacturerId=db_catalog_part.legal_entity.bpnl,
                     manufacturerPartId=db_catalog_part.manufacturer_part_id,
+                    name=db_catalog_part.name,
                     category=db_catalog_part.category,
+                    bpns=db_catalog_part.bpns,
                     customerPartIds={partner_catalog_part.customer_part_id: BusinessPartnerRead(
                         name=partner_catalog_part.business_partner.name,
                         bpnl=partner_catalog_part.business_partner.bpnl
@@ -181,7 +192,7 @@ class TwinManagementService:
             )
             if not db_catalog_parts:
                 raise ValueError("Catalog part not found.")
-            db_catalog_part = db_catalog_parts[0]
+            db_catalog_parts, _ = db_catalog_parts[0]
 
             # Step 2: Retrieve the business partner entity according to the business_partner_name
             # (if not there => raise error)
@@ -240,10 +251,15 @@ class TwinManagementService:
             # Step 2: Retrieve the enablement service stack entity from the DB according to the given name
             # (if not there => raise error)
             db_enablement_service_stack = repo.enablement_service_stack_repository.get_by_name(
-                enablement_service_stack_name
+                enablement_service_stack_name,
+                join_legal_entity=True
             )
             if not db_enablement_service_stack:
                 raise ValueError(f"Enablement service stack '{enablement_service_stack_name}' not found.")
+
+            # Step 2a: Enablement service stack consistency check
+            if db_enablement_service_stack.legal_entity.bpnl != db_twin.catalog_part.legal_entity.bpnl:
+                raise ValueError(f"Enablement service stack '{enablement_service_stack_name}' does not belong to the legal entity '{db_twin.catalog_part.legal_entity.bpnl}'.")
 
             # Step 3: Retrieve a potentially existing twin aspect entity for the given twin_id and semantic_id
             db_twin_aspect = repo.twin_aspect_repository.get_by_twin_id_semantic_id(
@@ -313,9 +329,12 @@ class TwinManagementService:
                 
                 # Step 7a: Register the submodel in the DTR (if necessary)
                 dtr_manager.create_submodel_descriptor(
-                    db_twin.aas_id,
-                    db_twin_aspect.submodel_id,
-                    db_twin_aspect.semantic_id,
+                    global_id=db_twin.global_id,
+                    aas_id=db_twin.aas_id,
+                    submodel_id=db_twin_aspect.submodel_id,
+                    semantic_id=db_twin_aspect.semantic_id,
+                    # TODO: later we should use the asset id from the EDC manager
+                    edc_asset_id=uuid4()
                 )
 
                 # Step 7b: Update the registration status to DTR_REGISTERED
@@ -337,7 +356,7 @@ class TwinManagementService:
                 }
             )
 
-    def get_catalog_part_twin_details(self, global_id: UUID) -> CatalogPartTwinDetailsRead:
+    def get_catalog_part_twin_details(self, global_id: UUID) -> Optional[CatalogPartTwinDetailsRead]:
         with RepositoryManagerFactory.create() as repo:
             db_twins = repo.twin_repository.find_catalog_part_twins(
                 global_id=global_id,
@@ -345,60 +364,61 @@ class TwinManagementService:
                 include_aspects=True,
                 include_registrations=True
             )
+            if not db_twins:
+                return None
             
-            result = []
-            for db_twin in db_twins:
-                db_catalog_part = db_twin.catalog_part
-                twin_result = CatalogPartTwinDetailsRead(
-                    globalId=db_twin.global_id,
-                    dtrAasId=db_twin.aas_id,
-                    createdDate=db_twin.created_date,
-                    modifiedDate=db_twin.modified_date,
-                    manufacturerId=db_catalog_part.legal_entity.bpnl,
-                    manufacturerPartId=db_catalog_part.manufacturer_part_id,
-                    category=db_catalog_part.category,
-                    additionalContext=db_twin.additional_context,
-                    customerPartIds={partner_catalog_part.customer_part_id: BusinessPartnerRead(
-                        name=partner_catalog_part.business_partner.name,
-                        bpnl=partner_catalog_part.business_partner.bpnl
-                    ) for partner_catalog_part in db_catalog_part.partner_catalog_parts}
-                )
-
-                twin_result.shares = [
-                    DataExchangeAgreementRead(
-                        name=db_twin_exchange.data_exchange_agreement.name,
-                        businessPartner=BusinessPartnerRead(
-                            name=db_twin_exchange.data_exchange_agreement.business_partner.name,
-                            bpnl=db_twin_exchange.data_exchange_agreement.business_partner.bpnl
-                        )
-                    ) for db_twin_exchange in db_twin.twin_exchanges
-                ]
-
-                twin_result.registrations = {
-                    db_twin_registration.enablement_service_stack.name: db_twin_registration.dtr_registered
-                     for db_twin_registration in db_twin.twin_registrations
-                }
-
-                twin_result.aspects = {
-                    db_twin_aspect.semantic_id: TwinAspectRead(
-                        semanticId=db_twin_aspect.semantic_id,
-                        submodelId=db_twin_aspect.submodel_id,
-                        registrations={
-                            db_twin_aspect_registration.enablement_service_stack.name: TwinAspectRegistration(
-                                enablementServiceStackName=db_twin_aspect_registration.enablement_service_stack.name,
-                                status=TwinAspectRegistrationStatus(db_twin_aspect_registration.status),
-                                mode=TwinsAspectRegistrationMode(db_twin_aspect_registration.registration_mode),
-                                createdDate=db_twin_aspect_registration.created_date,
-                                modifiedDate=db_twin_aspect_registration.modified_date
-                            ) for db_twin_aspect_registration in db_twin_aspect.twin_aspect_registrations
-                        } 
-                    ) for db_twin_aspect in db_twin.twin_aspects
-                }
-
-
-                result.append(twin_result)
+            db_twin = db_twins[0]
             
-            return result
+            db_catalog_part = db_twin.catalog_part
+            twin_result = CatalogPartTwinDetailsRead(
+                globalId=db_twin.global_id,
+                dtrAasId=db_twin.aas_id,
+                createdDate=db_twin.created_date,
+                modifiedDate=db_twin.modified_date,
+                manufacturerId=db_catalog_part.legal_entity.bpnl,
+                manufacturerPartId=db_catalog_part.manufacturer_part_id,
+                name=db_catalog_part.name,
+                category=db_catalog_part.category,
+                bpns=db_catalog_part.bpns,
+                additionalContext=db_twin.additional_context,
+                customerPartIds={partner_catalog_part.customer_part_id: BusinessPartnerRead(
+                    name=partner_catalog_part.business_partner.name,
+                    bpnl=partner_catalog_part.business_partner.bpnl
+                ) for partner_catalog_part in db_catalog_part.partner_catalog_parts}
+            )
+
+            twin_result.shares = [
+                DataExchangeAgreementRead(
+                    name=db_twin_exchange.data_exchange_agreement.name,
+                    businessPartner=BusinessPartnerRead(
+                        name=db_twin_exchange.data_exchange_agreement.business_partner.name,
+                        bpnl=db_twin_exchange.data_exchange_agreement.business_partner.bpnl
+                    )
+                ) for db_twin_exchange in db_twin.twin_exchanges
+            ]
+
+            twin_result.registrations = {
+                db_twin_registration.enablement_service_stack.name: db_twin_registration.dtr_registered
+                    for db_twin_registration in db_twin.twin_registrations
+            }
+
+            twin_result.aspects = {
+                db_twin_aspect.semantic_id: TwinAspectRead(
+                    semanticId=db_twin_aspect.semantic_id,
+                    submodelId=db_twin_aspect.submodel_id,
+                    registrations={
+                        db_twin_aspect_registration.enablement_service_stack.name: TwinAspectRegistration(
+                            enablementServiceStackName=db_twin_aspect_registration.enablement_service_stack.name,
+                            status=TwinAspectRegistrationStatus(db_twin_aspect_registration.status),
+                            mode=TwinsAspectRegistrationMode(db_twin_aspect_registration.registration_mode),
+                            createdDate=db_twin_aspect_registration.created_date,
+                            modifiedDate=db_twin_aspect_registration.modified_date
+                        ) for db_twin_aspect_registration in db_twin_aspect.twin_aspect_registrations
+                    } 
+                ) for db_twin_aspect in db_twin.twin_aspects
+            }
+
+            return twin_result
 
 
 def _create_dtr_manager(connection_settings: Optional[Dict[str, Any]]) -> DTRManager:
@@ -406,8 +426,17 @@ def _create_dtr_manager(connection_settings: Optional[Dict[str, Any]]) -> DTRMan
     Create a new instance of the DTRManager class.
     """
     # TODO: later we can configure the manager via the connection settings from the DB here
+    # For now we take the values from the config file
+    dtr_hostname = ConfigManager.get_config('digitalTwinRegistry.hostname')
+    dtr_uri = ConfigManager.get_config('digitalTwinRegistry.uri')
+    dtr_lookup_uri = ConfigManager.get_config('digitalTwinRegistry.lookupUri')
+    dtr_api_path = ConfigManager.get_config('digitalTwinRegistry.apiPath')
+    dtr_url = f"{dtr_hostname}{dtr_uri}"
+    dtr_lookup_url = f"{dtr_hostname}{dtr_lookup_uri}"
 
-    return DTRManager()
+    return DTRManager(
+        dtr_url=dtr_url, dtr_lookup_url=dtr_lookup_url,
+        api_path=str(dtr_api_path))
 
 def _create_edc_manager(connection_settings: Optional[Dict[str, Any]]) -> EDCManager:
     """
